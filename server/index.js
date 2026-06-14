@@ -46,9 +46,12 @@ app.post("/paystack/init", async (req, res) => {
   try {
     const { email, amount } = req.body;
 
-    if (!email || !amount) {
-      return res.status(400).json({
-        message: "Email and amount required",
+    console.log("👉 INIT REQUEST:", req.body);
+    console.log("👉 PAYSTACK KEY EXISTS:", !!PAYSTACK_SECRET);
+
+    if (!PAYSTACK_SECRET) {
+      return res.status(500).json({
+        message: "PAYSTACK_SECRET_KEY is missing in environment",
       });
     }
 
@@ -66,77 +69,17 @@ app.post("/paystack/init", async (req, res) => {
       }
     );
 
-    const data = response.data.data;
+    console.log("👉 PAYSTACK SUCCESS:", response.data);
 
-    return res.json({
-      authorization_url: data.authorization_url,
-      reference: data.reference,
-    });
+    return res.json(response.data.data);
 
   } catch (err) {
-    console.log("INIT ERROR:", err.response?.data || err.message);
+    console.log("👉 REAL ERROR:", err.response?.data || err.message);
 
     return res.status(500).json({
       message: "Payment initialization failed",
+      error: err.response?.data || err.message,
     });
-  }
-});
-
-/* =========================
-   PAYSTACK WEBHOOK (AUTO CREDIT WALLET)
-========================= */
-app.post("/paystack/webhook", async (req, res) => {
-  try {
-    const event = req.body;
-
-    // Always respond quickly to Paystack
-    if (!event || event.event !== "charge.success") {
-      return res.sendStatus(200);
-    }
-
-    const payment = event.data;
-
-    const email = payment.customer.email;
-    const amount = payment.amount / 100;
-    const reference = payment.reference;
-
-    const usersRef = db.collection("users");
-    const snapshot = await usersRef.where("email", "==", email).get();
-
-    if (snapshot.empty) {
-      console.log("User not found for email:", email);
-      return res.sendStatus(200);
-    }
-
-    const userDoc = snapshot.docs[0];
-    const userRef = userDoc.ref;
-
-    const currentBalance = Number(userDoc.data().balance || 0);
-    const newBalance = currentBalance + amount;
-
-    // Update wallet
-    await userRef.update({
-      balance: newBalance,
-    });
-
-    // Save transaction
-    await db.collection("transactions").add({
-      uid: userDoc.id,
-      email,
-      type: "topup",
-      amount,
-      reference,
-      balanceAfter: newBalance,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    console.log("Wallet credited:", email, amount);
-
-    return res.sendStatus(200);
-
-  } catch (err) {
-    console.log("WEBHOOK ERROR:", err.message);
-    return res.sendStatus(500);
   }
 });
 

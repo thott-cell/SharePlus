@@ -72,6 +72,12 @@ app.post("/paystack/init", async (req, res) => {
 /* =========================
    WEBHOOK (CREDITS WALLET)
 ========================= */
+app.post("/paystack/webhook", (req, res) => {
+  console.log("🔥🔥 WEBHOOK HIT RECEIVED 🔥🔥");
+  console.log("BODY:", req.body);
+
+  return res.sendStatus(200);
+});
 app.post("/paystack/webhook", async (req, res) => {
   try {
     const event = req.body;

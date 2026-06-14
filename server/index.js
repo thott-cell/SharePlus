@@ -6,11 +6,15 @@ const admin = require("firebase-admin");
 
 const app = express();
 
+/* =========================
+   MIDDLEWARE
+========================= */
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 /* =========================
-   FIREBASE INIT (SAFE)
+   FIREBASE INIT
 ========================= */
 const serviceAccount = require("./serviceAccountKey.json");
 
@@ -39,7 +43,7 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   INIT PAYMENT (THIS WAS MISSING)
+   INIT PAYMENT
 ========================= */
 app.post("/paystack/init", async (req, res) => {
   try {
@@ -70,19 +74,13 @@ app.post("/paystack/init", async (req, res) => {
 });
 
 /* =========================
-   WEBHOOK (CREDITS WALLET)
+   WEBHOOK (SINGLE CLEAN VERSION)
 ========================= */
-app.post("/paystack/webhook", (req, res) => {
-  console.log("🔥🔥 WEBHOOK HIT RECEIVED 🔥🔥");
-  console.log("BODY:", req.body);
-
-  return res.sendStatus(200);
-});
 app.post("/paystack/webhook", async (req, res) => {
   try {
-    const event = req.body;
+    console.log("🔥 WEBHOOK HIT RECEIVED");
 
-    console.log("WEBHOOK RECEIVED:", event);
+    const event = req.body;
 
     if (event.event !== "charge.success") {
       return res.sendStatus(200);
@@ -105,12 +103,10 @@ app.post("/paystack/webhook", async (req, res) => {
     const userDoc = snapshot.docs[0];
     const userRef = userDoc.ref;
 
-    const currentBalance = Number(userDoc.data().balance || 0);
-    const newBalance = currentBalance + amount;
+    const current = Number(userDoc.data().balance || 0);
+    const newBalance = current + amount;
 
-    await userRef.update({
-      balance: newBalance,
-    });
+    await userRef.update({ balance: newBalance });
 
     await db.collection("transactions").add({
       uid: userDoc.id,

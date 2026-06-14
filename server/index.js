@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
-
+const admin = require("firebase-admin");
 
 const app = express();
 
@@ -10,16 +10,15 @@ app.use(cors());
 app.use(express.json());
 
 /* =========================
-   FIREBASE INIT (CLEAN + SAFE)
+   FIREBASE INIT (SAFE)
 ========================= */
-const admin = require("firebase-admin");
-
 const serviceAccount = require("./serviceAccountKey.json");
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
-
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
+}
 
 const db = admin.firestore();
 
@@ -29,18 +28,49 @@ const db = admin.firestore();
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
 
 if (!PAYSTACK_SECRET) {
-  throw new Error("PAYSTACK_SECRET_KEY missing in environment variables");
+  throw new Error("PAYSTACK_SECRET_KEY missing");
 }
 
 /* =========================
-   SERVER HEALTH CHECK
+   HEALTH CHECK
 ========================= */
 app.get("/", (req, res) => {
   res.send("SharePlus API Running 🚀");
 });
 
 /* =========================
-   INIT PAYMENT
+   INIT PAYMENT (THIS WAS MISSING)
+========================= */
+app.post("/paystack/init", async (req, res) => {
+  try {
+    const { email, amount } = req.body;
+
+    const response = await axios.post(
+      "https://api.paystack.co/transaction/initialize",
+      {
+        email,
+        amount: amount * 100,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return res.json(response.data.data);
+  } catch (err) {
+    console.log("INIT ERROR:", err.response?.data || err.message);
+
+    return res.status(500).json({
+      message: "Payment init failed",
+    });
+  }
+});
+
+/* =========================
+   WEBHOOK (CREDITS WALLET)
 ========================= */
 app.post("/paystack/webhook", async (req, res) => {
   try {

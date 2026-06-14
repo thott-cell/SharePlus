@@ -58,6 +58,7 @@ export default function HomeScreen() {
         setLoading(false);
         return;
       }
+      console.log("UID:", auth.currentUser?.uid);
 
       const userRef = doc(db, "users", user.uid);
 

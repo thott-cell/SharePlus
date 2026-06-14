@@ -13,6 +13,15 @@ app.use(express.json());
    FIREBASE INIT (CLEAN + SAFE)
 ========================= */
 let serviceAccount;
+console.log(
+  "FIREBASE_SERVICE_ACCOUNT exists:",
+  !!process.env.FIREBASE_SERVICE_ACCOUNT
+);
+
+console.log(
+  "Length:",
+  process.env.FIREBASE_SERVICE_ACCOUNT?.length
+);
 
 try {
   serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);

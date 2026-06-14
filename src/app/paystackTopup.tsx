@@ -1,58 +1,57 @@
 import React, { useEffect, useState } from "react";
 import { View, ActivityIndicator, Alert } from "react-native";
 import { WebView } from "react-native-webview";
-
-import { auth } from "../firebase/firebaseConfig";
+import { initPayment, verifyPayment } from "../services/paystackService";
 
 export default function PaystackTopup() {
-  const [checkoutUrl, setCheckoutUrl] = useState("");
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [verified, setVerified] = useState(false);
 
   useEffect(() => {
-    initializePayment();
+    startPayment();
   }, []);
 
-  const initializePayment = async () => {
+  const startPayment = async () => {
     try {
-      const user = auth.currentUser;
+      const res = await initPayment(5000);
 
-      if (!user) return;
+      console.log("PAYSTACK INIT:", res);
 
-      const response = await fetch(
-        "http://10.225.105.225:3000/paystack/init",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            email: user.email,
-            amount: 5000,
-          }),
-        }
-      );
-
-      const data = await response.json();
-
-      setCheckoutUrl(data.authorization_url);
+      setUrl(res.data.authorization_url); // 👈 IMPORTANT FIX
     } catch (error: any) {
-  console.log("PAYSTACK ERROR:", error);
-
-  Alert.alert(
-    "Payment Error",
-    JSON.stringify(error?.message || error)
-  );
-}
+      Alert.alert("Error", error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  if (!checkoutUrl) {
+  const handleNavChange = async (navState: any) => {
+    const currentUrl = navState.url;
+
+    console.log("WEBVIEW URL:", currentUrl);
+
+    if (currentUrl.includes("reference=") && !verified) {
+      try {
+        setVerified(true);
+
+        const reference = currentUrl.split("reference=")[1];
+
+        const res = await verifyPayment(reference);
+
+        Alert.alert(
+          "Success",
+          `Wallet credited: ₦${res.amount}`
+        );
+      } catch (err: any) {
+        Alert.alert("Error", err.message);
+      }
+    }
+  };
+
+  if (loading || !url) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
         <ActivityIndicator size="large" />
       </View>
     );
@@ -60,8 +59,9 @@ export default function PaystackTopup() {
 
   return (
     <WebView
-      source={{ uri: checkoutUrl }}
+      source={{ uri: url }}
       startInLoadingState={true}
+      onNavigationStateChange={handleNavChange}
     />
   );
 }

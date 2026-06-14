@@ -42,44 +42,56 @@ app.get("/", (req, res) => {
 /* =========================
    INIT PAYMENT
 ========================= */
-app.post("/paystack/init", async (req, res) => {
+app.post("/paystack/webhook", async (req, res) => {
   try {
-    const { email, amount } = req.body;
+    const event = req.body;
 
-    console.log("👉 INIT REQUEST:", req.body);
-    console.log("👉 PAYSTACK KEY EXISTS:", !!PAYSTACK_SECRET);
+    console.log("WEBHOOK RECEIVED:", event);
 
-    if (!PAYSTACK_SECRET) {
-      return res.status(500).json({
-        message: "PAYSTACK_SECRET_KEY is missing in environment",
-      });
+    if (event.event !== "charge.success") {
+      return res.sendStatus(200);
     }
 
-    const response = await axios.post(
-      "https://api.paystack.co/transaction/initialize",
-      {
-        email,
-        amount: amount * 100,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${PAYSTACK_SECRET}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const payment = event.data;
 
-    console.log("👉 PAYSTACK SUCCESS:", response.data);
+    const email = payment.customer.email;
+    const amount = payment.amount / 100;
+    const reference = payment.reference;
 
-    return res.json(response.data.data);
+    const usersRef = db.collection("users");
+    const snapshot = await usersRef.where("email", "==", email).get();
 
-  } catch (err) {
-    console.log("👉 REAL ERROR:", err.response?.data || err.message);
+    if (snapshot.empty) {
+      console.log("User not found:", email);
+      return res.sendStatus(200);
+    }
 
-    return res.status(500).json({
-      message: "Payment initialization failed",
-      error: err.response?.data || err.message,
+    const userDoc = snapshot.docs[0];
+    const userRef = userDoc.ref;
+
+    const currentBalance = Number(userDoc.data().balance || 0);
+    const newBalance = currentBalance + amount;
+
+    await userRef.update({
+      balance: newBalance,
     });
+
+    await db.collection("transactions").add({
+      uid: userDoc.id,
+      email,
+      amount,
+      type: "topup",
+      reference,
+      balanceAfter: newBalance,
+      createdAt: new Date(),
+    });
+
+    console.log("WALLET CREDITED:", email, newBalance);
+
+    return res.sendStatus(200);
+  } catch (err) {
+    console.log("WEBHOOK ERROR:", err.message);
+    return res.sendStatus(500);
   }
 });
 

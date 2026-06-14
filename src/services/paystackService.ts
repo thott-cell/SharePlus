@@ -23,13 +23,13 @@ export const initPayment = async (amount: number) => {
 
   const data = await res.json();
 
-  console.log("INIT RESPONSE:", data); // 👈 IMPORTANT DEBUG
+  console.log("INIT RESPONSE:", data);
 
-  if (!res.ok) {
-    throw new Error(data.message || "Init failed");
+  if (!res.ok || !data?.authorization_url) {
+    throw new Error(data?.message || "Init failed");
   }
 
-  return data; // ✅ MUST return directly
+  return data; // IMPORTANT: flat object
 };
 
 /* =========================
@@ -42,7 +42,7 @@ export const verifyPayment = async (reference: string) => {
 
   const data = await res.json();
 
-  console.log("VERIFY RESPONSE:", data); // 👈 IMPORTANT DEBUG
+  console.log("VERIFY RESPONSE:", data);
 
   if (!res.ok) {
     throw new Error(data.message || "Verify failed");

@@ -12,32 +12,14 @@ app.use(express.json());
 /* =========================
    FIREBASE INIT (CLEAN + SAFE)
 ========================= */
-let serviceAccount;
-console.log(
-  "FIREBASE_SERVICE_ACCOUNT exists:",
-  !!process.env.FIREBASE_SERVICE_ACCOUNT
-);
+const admin = require("firebase-admin");
 
-console.log(
-  "Length:",
-  process.env.FIREBASE_SERVICE_ACCOUNT?.length
-);
+const serviceAccount = require("./serviceAccountKey.json");
 
-try {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} catch (error) {
-  console.log("Firebase env parse error:", error.message);
-}
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
-if (!serviceAccount) {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT not found or invalid");
-}
-
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
-}
 
 const db = admin.firestore();
 

@@ -18,42 +18,43 @@ app.use(express.urlencoded({ extended: false }));
 ========================= */
 const serviceAccount = require("./serviceAccountKey.json");
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
-}
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const db = admin.firestore();
 
 /* =========================
-   PAYSTACK SECRET
+   PAYSTACK KEY
 ========================= */
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
 
 if (!PAYSTACK_SECRET) {
-  throw new Error("PAYSTACK_SECRET_KEY missing");
+  throw new Error("Missing PAYSTACK_SECRET_KEY");
 }
 
 /* =========================
-   HEALTH CHECK
+   TEST ROUTE (IMPORTANT)
 ========================= */
 app.get("/", (req, res) => {
-  res.send("SharePlus API Running 🚀");
+  res.send("Server is LIVE 🚀");
 });
 
 /* =========================
-   INIT PAYMENT
+   INIT PAYMENT (IMPORTANT FIX)
 ========================= */
 app.post("/paystack/init", async (req, res) => {
   try {
-    const { email, amount } = req.body;
+    const { email, amount, uid } = req.body;
 
     const response = await axios.post(
       "https://api.paystack.co/transaction/initialize",
       {
         email,
         amount: amount * 100,
+        metadata: {
+          uid: uid,
+        },
       },
       {
         headers: {
@@ -63,22 +64,20 @@ app.post("/paystack/init", async (req, res) => {
       }
     );
 
-    return res.json(response.data.data);
+    res.json(response.data.data);
   } catch (err) {
     console.log("INIT ERROR:", err.response?.data || err.message);
-
-    return res.status(500).json({
-      message: "Payment init failed",
-    });
+    res.status(500).json({ message: "Init failed" });
   }
 });
 
 /* =========================
-   WEBHOOK (SINGLE CLEAN VERSION)
+   WEBHOOK (FINAL FIXED VERSION)
 ========================= */
 app.post("/paystack/webhook", async (req, res) => {
   try {
     console.log("🔥 WEBHOOK HIT RECEIVED");
+    console.log(JSON.stringify(req.body, null, 2));
 
     const event = req.body;
 
@@ -88,37 +87,40 @@ app.post("/paystack/webhook", async (req, res) => {
 
     const payment = event.data;
 
-    const email = payment.customer.email;
+    const uid = payment.metadata?.uid;
     const amount = payment.amount / 100;
     const reference = payment.reference;
 
-    const usersRef = db.collection("users");
-    const snapshot = await usersRef.where("email", "==", email).get();
-
-    if (snapshot.empty) {
-      console.log("User not found:", email);
+    if (!uid) {
+      console.log("❌ UID missing in metadata");
       return res.sendStatus(200);
     }
 
-    const userDoc = snapshot.docs[0];
-    const userRef = userDoc.ref;
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
 
-    const current = Number(userDoc.data().balance || 0);
+    if (!userSnap.exists) {
+      console.log("❌ User not found:", uid);
+      return res.sendStatus(200);
+    }
+
+    const current = Number(userSnap.data().balance || 0);
     const newBalance = current + amount;
 
-    await userRef.update({ balance: newBalance });
-
-    await db.collection("transactions").add({
-      uid: userDoc.id,
-      email,
-      amount,
-      type: "topup",
-      reference,
-      balanceAfter: newBalance,
-      createdAt: new Date(),
+    await userRef.update({
+      balance: newBalance,
     });
 
-    console.log("WALLET CREDITED:", email, newBalance);
+    await db.collection("transactions").add({
+      uid,
+      type: "topup",
+      amount,
+      reference,
+      balanceAfter: newBalance,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    console.log("✅ WALLET CREDITED:", uid, newBalance);
 
     return res.sendStatus(200);
   } catch (err) {
@@ -133,5 +135,5 @@ app.post("/paystack/webhook", async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on port", PORT);
 });

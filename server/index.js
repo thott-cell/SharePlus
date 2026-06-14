@@ -5,15 +5,24 @@ const cors = require("cors");
 const admin = require("firebase-admin");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
-const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
-
 /* =========================
-   FIREBASE INIT (SAFE)
+   FIREBASE INIT (CLEAN + SAFE)
 ========================= */
-const serviceAccount = require("./serviceAccountKey.json");
+let serviceAccount;
+
+try {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} catch (error) {
+  console.log("Firebase env parse error:", error.message);
+}
+
+if (!serviceAccount) {
+  throw new Error("FIREBASE_SERVICE_ACCOUNT not found or invalid");
+}
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -24,10 +33,19 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 /* =========================
-   HEALTH CHECK
+   PAYSTACK SECRET
+========================= */
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
+
+if (!PAYSTACK_SECRET) {
+  throw new Error("PAYSTACK_SECRET_KEY missing in environment variables");
+}
+
+/* =========================
+   SERVER HEALTH CHECK
 ========================= */
 app.get("/", (req, res) => {
-  res.send("SharePlus Paystack Server Running 🚀");
+  res.send("SharePlus API Running 🚀");
 });
 
 /* =========================
@@ -57,89 +75,77 @@ app.post("/paystack/init", async (req, res) => {
       }
     );
 
-    return res.json(response.data);
+    const data = response.data.data;
+
+    return res.json({
+      authorization_url: data.authorization_url,
+      reference: data.reference,
+    });
+
   } catch (err) {
-    console.log("INIT ERROR:", err.message);
+    console.log("INIT ERROR:", err.response?.data || err.message);
 
     return res.status(500).json({
-      message: "Payment init failed",
+      message: "Payment initialization failed",
     });
   }
 });
 
 /* =========================
-   VERIFY + CREDIT WALLET
+   PAYSTACK WEBHOOK (AUTO CREDIT WALLET)
 ========================= */
-app.get("/paystack/verify/:reference", async (req, res) => {
+app.post("/paystack/webhook", async (req, res) => {
   try {
-    const { reference } = req.params;
+    const event = req.body;
 
-    const response = await axios.get(
-      `https://api.paystack.co/transaction/verify/${reference}`,
-      {
-        headers: {
-          Authorization: `Bearer ${PAYSTACK_SECRET}`,
-        },
-      }
-    );
-
-    const payment = response.data.data;
-
-    if (payment.status !== "success") {
-      return res.status(400).json({
-        message: "Payment not successful",
-      });
+    // Always respond quickly to Paystack
+    if (!event || event.event !== "charge.success") {
+      return res.sendStatus(200);
     }
+
+    const payment = event.data;
 
     const email = payment.customer.email;
     const amount = payment.amount / 100;
+    const reference = payment.reference;
 
-    // =========================
-    // FIND USER + UPDATE WALLET
-    // =========================
     const usersRef = db.collection("users");
     const snapshot = await usersRef.where("email", "==", email).get();
 
     if (snapshot.empty) {
-      return res.status(404).json({
-        message: "User not found",
-      });
+      console.log("User not found for email:", email);
+      return res.sendStatus(200);
     }
 
-   const doc = snapshot.docs[0];
+    const userDoc = snapshot.docs[0];
+    const userRef = userDoc.ref;
 
-const userRef = doc.ref;
+    const currentBalance = Number(userDoc.data().balance || 0);
+    const newBalance = currentBalance + amount;
 
-const userData = await userRef.get();
-
-const current = Number(userData.data().balance || 0);
-
-const newBalance = current + amount;
-
-await userRef.update({
-  balance: newBalance,
-});
-
-await db.collection("transactions").add({
-  uid: userRef.id,
-  type: "credit",
-  amount,
-  reason: "Paystack funding",
-  balanceAfter: newBalance,
-  createdAt: admin.firestore.FieldValue.serverTimestamp(),
-});
-
-return res.json({
-  message: "Wallet credited successfully",
-  amount,
-  newBalance,
-});
-  } catch (err) {
-    console.log("VERIFY ERROR:", err.message);
-
-    return res.status(500).json({
-      message: "Verification failed",
+    // Update wallet
+    await userRef.update({
+      balance: newBalance,
     });
+
+    // Save transaction
+    await db.collection("transactions").add({
+      uid: userDoc.id,
+      email,
+      type: "topup",
+      amount,
+      reference,
+      balanceAfter: newBalance,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    console.log("Wallet credited:", email, amount);
+
+    return res.sendStatus(200);
+
+  } catch (err) {
+    console.log("WEBHOOK ERROR:", err.message);
+    return res.sendStatus(500);
   }
 });
 

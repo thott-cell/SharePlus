@@ -3,6 +3,7 @@ const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
 const admin = require("firebase-admin");
+const path = require("path");
 
 const app = express();
 
@@ -14,51 +15,22 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 /* =========================
-   FIREBASE INIT (STRICTLY FORMATTED)
+   FIREBASE INIT (SECURE SECRET FILE)
 ========================= */
 if (!admin.apps.length) {
-  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PROJECT_ID) {
-    console.log("🔄 Initializing Firebase via Render Env Variables...");
+  try {
+    // Looks for the file locally or inside Render's secure secret file layer
+    const serviceAccountPath = path.join(__dirname, "serviceAccountKey.json");
+    const serviceAccount = require(serviceAccountPath);
     
-    // Auto-fix the string formatting so Node.js can decode it safely
-    let formattedPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
-    
-    // 1. Strip any stray wrapping quotes that might have slipped into Render
-    if (formattedPrivateKey.startsWith('"') && formattedPrivateKey.endsWith('"')) {
-      formattedPrivateKey = formattedPrivateKey.slice(1, -1);
-    }
-    if (formattedPrivateKey.startsWith("'") && formattedPrivateKey.endsWith("'")) {
-      formattedPrivateKey = formattedPrivateKey.slice(1, -1);
-    }
-
-    // 2. Safely replace string escaped \n representations with actual newline breaks
-    formattedPrivateKey = formattedPrivateKey.replace(/\\n/g, '\n');
-
-    try {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: formattedPrivateKey,
-        }),
-      });
-      console.log("✅ Firebase Admin successfully initialized!");
-    } catch (initErr) {
-      console.error("❌ Firebase Initialization failed inside cert parser:");
-      console.error(initErr.message);
-      process.exit(1);
-    }
-  } else {
-    console.log("💻 Live Env missing. Initializing Firebase via local JSON file...");
-    try {
-      const serviceAccount = require("./serviceAccountKey.json");
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-      });
-    } catch (err) {
-      console.error("❌ CRITICAL ERROR: No Firebase credentials found anywhere!");
-      process.exit(1);
-    }
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    console.log("✅ Firebase Admin successfully initialized using serviceAccountKey.json!");
+  } catch (err) {
+    console.error("❌ CRITICAL ERROR: Could not load serviceAccountKey.json");
+    console.error(err.message);
+    process.exit(1);
   }
 }
 

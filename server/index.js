@@ -3,7 +3,7 @@ const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const path = require("path");
+const fs = require("fs"); // Node built-in file system tool
 
 const app = express();
 
@@ -15,20 +15,34 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 /* =========================
-   FIREBASE INIT (SECURE SECRET FILE)
+   FIREBASE INIT (FIXED PATH FOR RENDER)
 ========================= */
 if (!admin.apps.length) {
+  // Render saves Secret Files strictly inside the '/etc/secrets/' directory path
+  const renderSecretPath = "/etc/secrets/serviceAccountKey.json";
+  const localSecretPath = "./serviceAccountKey.json";
+  
+  let chosenPath = "";
+
+  if (fs.existsSync(renderSecretPath)) {
+    chosenPath = renderSecretPath;
+    console.log("🔒 Initializing Firebase via Render Secure Secret File path...");
+  } else if (fs.existsSync(localSecretPath)) {
+    chosenPath = localSecretPath;
+    console.log("💻 Initializing Firebase via Local Development File path...");
+  } else {
+    console.error("❌ CRITICAL ERROR: serviceAccountKey.json could not be found anywhere on this machine!");
+    process.exit(1);
+  }
+
   try {
-    // Looks for the file locally or inside Render's secure secret file layer
-    const serviceAccountPath = path.join(__dirname, "serviceAccountKey.json");
-    const serviceAccount = require(serviceAccountPath);
-    
+    const serviceAccount = require(chosenPath);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
-    console.log("✅ Firebase Admin successfully initialized using serviceAccountKey.json!");
+    console.log("✅ Firebase Admin successfully initialized and live!");
   } catch (err) {
-    console.error("❌ CRITICAL ERROR: Could not load serviceAccountKey.json");
+    console.error("❌ CRITICAL ERROR: Could not parse or execute the credentials file:");
     console.error(err.message);
     process.exit(1);
   }

@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 
 import { LinearGradient } from "expo-linear-gradient";
@@ -36,13 +35,14 @@ import {
 
 export default function HomeScreen() {
   console.log(
-  "VTPASS API KEY:",
-  process.env.EXPO_PUBLIC_VTPASS_API_KEY
-);
+    "VTPASS API KEY:",
+    process.env.EXPO_PUBLIC_VTPASS_API_KEY
+  );
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("User");
+  const [email, setEmail] = useState(""); // Kept to track user email
   const [balance, setBalance] = useState(0);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [showAll, setShowAll] = useState(false);
@@ -59,6 +59,7 @@ export default function HomeScreen() {
         return;
       }
       console.log("UID:", auth.currentUser?.uid);
+      setEmail(user.email || ""); // Save the email value from Auth object
 
       const userRef = doc(db, "users", user.uid);
 
@@ -106,9 +107,23 @@ export default function HomeScreen() {
     };
   }, []);
 
- const handleTopUp = () => {
-  router.push("../paystackTopup");
-};
+  /* ========================================================
+     FIXED NAVIGATION LIFTING PROPS
+     ======================================================== */
+  const handleTopUp = () => {
+    const currentUid = auth.currentUser?.uid;
+    
+    if (!currentUid || !email) {
+      console.log("Cannot navigate: user metadata is loading.");
+      return;
+    }
+
+    // Passes key params through url navigation string parameters safely
+    router.push({
+      pathname: "../paystackTopup",
+      params: { uid: currentUid, email: email }
+    });
+  };
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -175,7 +190,7 @@ export default function HomeScreen() {
         </View>
 
         <TouchableOpacity style={styles.topUpBtn} onPress={handleTopUp}>
-          <Text style={styles.topUpText}>+ Add ₦1000 (Test Top-Up)</Text>
+          <Text style={styles.topUpText}>+ Add ₦5,000</Text>
         </TouchableOpacity>
       </LinearGradient>
 
@@ -259,14 +274,12 @@ export default function HomeScreen() {
             })}
 
             {transactions.length > 3 && (
-             <TouchableOpacity
-  onPress={() => router.push("/transactions")}
-  style={styles.seeMoreBtn}
->
-  <Text style={styles.seeMoreText}>
-    See More
-  </Text>
-</TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => router.push("/transactions")}
+                style={styles.seeMoreBtn}
+              >
+                <Text style={styles.seeMoreText}>See More</Text>
+              </TouchableOpacity>
             )}
           </>
         )}
@@ -282,176 +295,86 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 70,
   },
-
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#070B1A",
   },
-
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 30,
   },
-
   greeting: {
     color: "#9CA3AF",
     fontSize: 16,
   },
-
   name: {
     color: "white",
     fontSize: 28,
     fontWeight: "bold",
     marginTop: 5,
   },
-
   profileCircle: {
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: "#1F2937",
+    backgroundColor: "#7C3AED",
     justifyContent: "center",
     alignItems: "center",
   },
-
   profileText: {
     color: "white",
     fontSize: 20,
     fontWeight: "bold",
   },
-
   walletCard: {
-    borderRadius: 25,
-    padding: 25,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 30,
   },
-
   walletTop: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "flex-start",
   },
-
   walletLabel: {
-    color: "#E9D5FF",
-    fontSize: 16,
+    color: "rgba(255, 255, 255, 0.8)",
+    fontSize: 14,
   },
-
   balance: {
     color: "white",
     fontSize: 32,
     fontWeight: "bold",
-    marginTop: 10,
+    marginVertical: 5,
   },
-
   bonus: {
-    color: "#F3E8FF",
-    marginTop: 10,
+    color: "rgba(255, 255, 255, 0.6)",
+    fontSize: 12,
   },
-
   addButton: {
-    width: 45,
-    height: 45,
-    borderRadius: 22,
-    backgroundColor: "#10B981",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  topUpBtn: {
-    marginTop: 15,
-    backgroundColor: "#111827",
-    padding: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
     borderRadius: 12,
-    alignItems: "center",
+    padding: 8,
   },
-
+  topUpBtn: {
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: "center",
+    marginTop: 15,
+  },
   topUpText: {
     color: "white",
     fontWeight: "bold",
   },
-
   sectionTitle: {
     color: "white",
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "bold",
-    marginTop: 30,
-    marginBottom: 20,
+    marginBottom: 15,
   },
-
   actionsRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-
-  actionButton: {
-    width: 75,
-    height: 75,
-    borderRadius: 20,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  actionText: {
-    color: "white",
-    marginTop: 8,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-
-  transactionCard: {
-    backgroundColor: "#111827",
-    borderRadius: 20,
-    padding: 15,
-    marginBottom: 40,
-  },
-
-  transactionRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginVertical: 10,
-  },
-
-  transactionLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  iconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#7C3AED",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 10,
-  },
-
-  transactionTitle: {
-    color: "white",
-    fontWeight: "bold",
-  },
-
-  transactionDate: {
-    color: "#9CA3AF",
-    fontSize: 12,
-  },
-
-  transactionAmount: {
-    fontWeight: "bold",
-  },
-
-  seeMoreBtn: {
-    marginTop: 15,
-    alignItems: "center",
-    paddingVertical: 10,
-  },
-
-  seeMoreText: {
-    color: "#7C3AED",
-    fontWeight: "bold",
-  },
-});
+    flexDirection: "row",justifyContent: "space-between",marginBottom: 30,},actionButton: {width: "22%",aspectRatio: 1,borderRadius: 12,justifyContent: "center",alignItems: "center",},actionText: {color: "white",fontSize: 12,marginTop: 5,fontWeight: "500",},transactionCard: {backgroundColor: "#111827",borderRadius: 16,padding: 15,marginBottom: 40,},transactionRow: {flexDirection: "row",justifyContent: "space-between",alignItems: "center",paddingVertical: 12,borderBottomWidth: 1,borderBottomColor: "#1F2937",},transactionLeft: {flexDirection: "row",alignItems: "center",},iconCircle: {width: 36,height: 36,borderRadius: 18,backgroundColor: "#1F2937",justifyContent: "center",alignItems: "center",marginRight: 12,},transactionTitle: {color: "white",fontWeight: "bold",fontSize: 14,},transactionDate: {color: "#6B7280",fontSize: 12,marginTop: 2,},transactionAmount: {fontWeight: "bold",fontSize: 16,},seeMoreBtn: {alignItems: "center",paddingTop: 12,},seeMoreText: {color: "#7C3AED",fontWeight: "bold",},});

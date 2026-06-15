@@ -14,13 +14,33 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 /* =========================
-   FIREBASE INIT
+   FIREBASE INIT (HYBRID FIX)
 ========================= */
-const serviceAccount = require("./serviceAccountKey.json");
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
+if (!admin.apps.length) {
+  // Check if Render Environment Variables exist
+  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PROJECT_ID) {
+    console.log("🔄 Initializing Firebase via Render Env Variables...");
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'), // Fixes spacing breaks
+      }),
+    });
+  } else {
+    // Fallback for your local computer testing environment
+    console.log("💻 Live Env missing. Initializing Firebase via local JSON file...");
+    try {
+      const serviceAccount = require("./serviceAccountKey.json");
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+    } catch (err) {
+      console.error("❌ CRITICAL ERROR: No Firebase credentials found anywhere!");
+      process.exit(1);
+    }
+  }
+}
 
 const db = admin.firestore();
 
@@ -33,11 +53,23 @@ if (!PAYSTACK_SECRET) {
   throw new Error("Missing PAYSTACK_SECRET_KEY");
 }
 
+// Helper utility function to parse the UID safely out of metadata locations
+function extractUid(paymentObject) {
+  if (paymentObject.metadata?.uid) {
+    return paymentObject.metadata.uid;
+  }
+  if (paymentObject.metadata?.custom_fields) {
+    const uidField = paymentObject.metadata.custom_fields.find(f => f.variable_name === 'uid');
+    if (uidField) return uidField.value;
+  }
+  return null;
+}
+
 /* =========================
-   TEST ROUTE (IMPORTANT)
+   TEST ROUTE
 ========================= */
 app.get("/", (req, res) => {
-  res.send("Server is LIVE 🚀");
+  res.send("Server is LIVE and connected safely! 🚀");
 });
 
 /* =========================
@@ -48,12 +80,19 @@ app.post("/paystack/init", async (req, res) => {
     const { email, amount, uid } = req.body;
 
     const response = await axios.post(
-      "https://api.paystack.co/transaction/initialize",
+      "https://paystack.co",
       {
         email,
         amount: amount * 100, // Convert to kobo
         metadata: {
           uid: uid,
+          custom_fields: [
+            {
+              display_name: "User UID",
+              variable_name: "uid",
+              value: uid
+            }
+          ]
         },
       },
       {
@@ -72,13 +111,12 @@ app.post("/paystack/init", async (req, res) => {
 });
 
 /* =========================
-   VERIFY PAYMENT (FRONTEND FALLBACK)
+   VERIFY PAYMENT
 ========================= */
 app.get("/paystack/verify/:reference", async (req, res) => {
   try {
     const { reference } = req.params;
 
-    // Verify transaction directly with Paystack API
     const response = await axios.get(
       `https://paystack.co{reference}`,
       {
@@ -92,14 +130,13 @@ app.get("/paystack/verify/:reference", async (req, res) => {
       return res.status(400).json({ message: "Transaction was not successful" });
     }
 
-    const uid = payment.metadata?.uid;
-    const amount = payment.amount / 100; // Convert from kobo back to Naira
+    const uid = extractUid(payment);
+    const amount = payment.amount / 100;
 
     if (!uid) {
       return res.status(400).json({ message: "UID missing in metadata" });
     }
 
-    // Process wallet update atomically using a Firestore transaction
     const userRef = db.collection("users").doc(uid);
     
     const result = await db.runTransaction(async (transaction) => {
@@ -109,7 +146,6 @@ app.get("/paystack/verify/:reference", async (req, res) => {
         throw new Error("User not found");
       }
 
-      // Check if this transaction reference was already processed to avoid double crediting
       const txRef = db.collection("transactions").doc(reference);
       const txSnap = await transaction.get(txRef);
       
@@ -120,13 +156,11 @@ app.get("/paystack/verify/:reference", async (req, res) => {
       const current = Number(userSnap.data().balance || 0);
       const newBalance = current + amount;
 
-      // Update wallet balance
       transaction.update(userRef, {
         balance: newBalance,
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
 
-      // Write transaction history using reference as the document ID
       transaction.set(txRef, {
         uid,
         type: "topup",
@@ -139,7 +173,7 @@ app.get("/paystack/verify/:reference", async (req, res) => {
       return { status: "success", balance: newBalance };
     });
 
-    console.log(`✅ WALLET VERIFIED & CREDITED VIA API: ${uid}, New Balance: ${result.balance}`);
+    console.log(`✅ WALLET CREDITED VIA API: ${uid}, Balance: ${result.balance}`);
     return res.status(200).json({ status: "success", balance: result.balance });
 
   } catch (err) {
@@ -149,7 +183,7 @@ app.get("/paystack/verify/:reference", async (req, res) => {
 });
 
 /* =========================
-   WEBHOOK (BACKEND AUTOMATION)
+   WEBHOOK
 ========================= */
 app.post("/paystack/webhook", async (req, res) => {
   try {
@@ -161,7 +195,7 @@ app.post("/paystack/webhook", async (req, res) => {
     }
 
     const payment = event.data;
-    const uid = payment.metadata?.uid;
+    const uid = extractUid(payment);
     const amount = payment.amount / 100;
     const reference = payment.reference;
 
@@ -184,7 +218,7 @@ app.post("/paystack/webhook", async (req, res) => {
       const txSnap = await transaction.get(txRef);
 
       if (txSnap.exists) {
-        console.log("⚠️ Transaction already processed via Verify endpoint.");
+        console.log("⚠️ Transaction already processed.");
         return;
       }
 
@@ -219,7 +253,6 @@ app.post("/paystack/webhook", async (req, res) => {
    START SERVER
 ========================= */
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });

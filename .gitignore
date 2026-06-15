@@ -5,7 +5,7 @@ node_modules/
 
 # secrets (NEVER upload these)
 server/.env
-
+server/serviceAccountKey.json
 
 # dependencies
 node_modules/

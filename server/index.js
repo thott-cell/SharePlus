@@ -14,21 +14,41 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 /* =========================
-   FIREBASE INIT (HYBRID FIX)
+   FIREBASE INIT (STRICTLY FORMATTED)
 ========================= */
 if (!admin.apps.length) {
-  // Check if Render Environment Variables exist
   if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PROJECT_ID) {
     console.log("🔄 Initializing Firebase via Render Env Variables...");
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'), // Fixes spacing breaks
-      }),
-    });
+    
+    // Auto-fix the string formatting so Node.js can decode it safely
+    let formattedPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+    
+    // 1. Strip any stray wrapping quotes that might have slipped into Render
+    if (formattedPrivateKey.startsWith('"') && formattedPrivateKey.endsWith('"')) {
+      formattedPrivateKey = formattedPrivateKey.slice(1, -1);
+    }
+    if (formattedPrivateKey.startsWith("'") && formattedPrivateKey.endsWith("'")) {
+      formattedPrivateKey = formattedPrivateKey.slice(1, -1);
+    }
+
+    // 2. Safely replace string escaped \n representations with actual newline breaks
+    formattedPrivateKey = formattedPrivateKey.replace(/\\n/g, '\n');
+
+    try {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: formattedPrivateKey,
+        }),
+      });
+      console.log("✅ Firebase Admin successfully initialized!");
+    } catch (initErr) {
+      console.error("❌ Firebase Initialization failed inside cert parser:");
+      console.error(initErr.message);
+      process.exit(1);
+    }
   } else {
-    // Fallback for your local computer testing environment
     console.log("💻 Live Env missing. Initializing Firebase via local JSON file...");
     try {
       const serviceAccount = require("./serviceAccountKey.json");
@@ -53,7 +73,6 @@ if (!PAYSTACK_SECRET) {
   throw new Error("Missing PAYSTACK_SECRET_KEY");
 }
 
-// Helper utility function to parse the UID safely out of metadata locations
 function extractUid(paymentObject) {
   if (paymentObject.metadata?.uid) {
     return paymentObject.metadata.uid;
@@ -83,7 +102,7 @@ app.post("/paystack/init", async (req, res) => {
       "https://paystack.co",
       {
         email,
-        amount: amount * 100, // Convert to kobo
+        amount: amount * 100,
         metadata: {
           uid: uid,
           custom_fields: [

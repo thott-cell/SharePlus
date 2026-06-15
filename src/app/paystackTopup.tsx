@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Linking, StyleSheet } from 'react-native';
 import axios from 'axios';
+import paystackService from '@/services/paystackService';
 
 // Replace with your actual live Render app URL
 const BACKEND_URL = 'https://shareplus-server.onrender.com'; 
@@ -15,21 +16,28 @@ interface TopupProps {
 export default function PaystackTopup({ user }: TopupProps) {
   const [loading, setLoading] = useState<boolean>(false);
 
-  const handleTopup = async (amount: number) => {
-    setLoading(true);
-    try {
-      // 1. Initialize payment via your backend /paystack/init route
-      const initResponse = await axios.post(`${BACKEND_URL}/paystack/init`, {
-        email: user.email,
-        amount: amount,
-        uid: user.uid,
-      });
+  // Inside paystackTopup.tsx
+const handleTopup = async (amount: number) => {
+  // 1. Structural safety check
+  if (!user || !user.email || !user.uid) {
+    Alert.alert(
+      'Profile Error', 
+      'User profile data is still loading. Please wait a moment and try again.'
+    );
+    return;
+  }
 
-      const { authorization_url, reference } = initResponse.data;
+  setLoading(true);
+  try {
+    const { authorization_url, reference } = await paystackService.initializePayment({
+      email: user.email, // Safe from crashes now
+      amount,
+      uid: user.uid,
+    });
+    
+    await Linking.openURL(authorization_url);
+    // ... rest of your code
 
-      if (!authorization_url || !reference) {
-        throw new Error('Invalid initialization details received from server.');
-      }
 
       // 2. Launch the Paystack checkout tab
       const canOpen = await Linking.canOpenURL(authorization_url);

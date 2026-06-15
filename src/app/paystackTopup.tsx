@@ -1,81 +1,132 @@
-import React, { useEffect, useState } from "react";
-import { View, ActivityIndicator, Alert } from "react-native";
-import { WebView } from "react-native-webview";
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Linking, StyleSheet } from 'react-native';
+import axios from 'axios';
 
-import { initPayment, verifyPayment } from "../services/paystackService";
+// Replace with your actual live Render app URL
+const BACKEND_URL = 'https://onrender.com'; 
 
-export default function PaystackTopup() {
-  const [url, setUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [reference, setReference] = useState<string | null>(null);
-  const [verified, setVerified] = useState(false);
+interface TopupProps {
+  user: {
+    uid: string;
+    email: string;
+  };
+}
 
-  useEffect(() => {
-    startPayment();
-  }, []);
+export default function PaystackTopup({ user }: TopupProps) {
+  const [loading, setLoading] = useState<boolean>(false);
 
-  const startPayment = async () => {
+  const handleTopup = async (amount: number) => {
+    setLoading(true);
     try {
-      const data = await initPayment(5000);
+      // 1. Initialize payment via your backend /paystack/init route
+      const initResponse = await axios.post(`${BACKEND_URL}/paystack/init`, {
+        email: user.email,
+        amount: amount,
+        uid: user.uid,
+      });
 
-      if (!data?.authorization_url) {
-        throw new Error("Authorization URL missing");
+      const { authorization_url, reference } = initResponse.data;
+
+      if (!authorization_url || !reference) {
+        throw new Error('Invalid initialization details received from server.');
       }
 
-      setUrl(data.authorization_url);
-      setReference(data.reference);
-
-      console.log("PAYSTACK INIT OK:", data);
+      // 2. Launch the Paystack checkout tab
+      const canOpen = await Linking.canOpenURL(authorization_url);
+      if (canOpen) {
+        await Linking.openURL(authorization_url);
+        
+        // 3. Prompt user to instantly check and verify status manually 
+        Alert.alert(
+          'Confirm Payment',
+          'Please complete the transaction in your browser, then tap verify below.',
+          [
+            {
+              text: 'Verify My Payment',
+              onPress: () => verifyPayment(reference),
+            },
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            }
+          ],
+          { cancelable: false }
+        );
+      } else {
+        Alert.alert('Error', 'Unable to open the checkout payment screen.');
+      }
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      console.error('Initialization error:', error);
+      const errorMsg = error.response?.data?.message || 'Please check your connection and try again.';
+      Alert.alert('Payment Failed', errorMsg);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleNavChange = async (navState: any) => {
-    const currentUrl = navState.url;
-
-    // only verify once
-    if (verified) return;
-
-    // Paystack success usually contains reference
-    if (currentUrl.includes("reference=")) {
-      try {
-        setVerified(true);
-
-        const refFromUrl = currentUrl.split("reference=")[1];
-        const finalRef = refFromUrl || reference;
-
-        if (!finalRef) {
-          throw new Error("No payment reference found");
-        }
-
-        const res = await verifyPayment(finalRef);
-
-        Alert.alert(
-          "Success",
-          `Wallet credited: ₦${res.amount}`
-        );
-
-      } catch (err: any) {
-        Alert.alert("Error", err.message);
+  const verifyPayment = async (reference: string) => {
+    setLoading(true);
+    try {
+      // 4. Hits your custom app.get("/paystack/verify/:reference") backend endpoint
+      const verifyResponse = await axios.get(`${BACKEND_URL}/paystack/verify/${reference}`);
+      
+      if (verifyResponse.data.status === 'success') {
+        const updatedBalance = verifyResponse.data.balance;
+        Alert.alert('Success 🎉', `Wallet updated! Your new balance is: ₦${updatedBalance}`);
+      } else {
+        Alert.alert('Pending', 'Payment verification was not successful. Try again.');
       }
+    } catch (error: any) {
+      console.error('Verification error:', error);
+      const errorMsg = error.response?.data?.message || 'Could not verify transaction status.';
+      Alert.alert('Verification Failed', errorMsg);
+    } finally {
+      setLoading(false);
     }
   };
 
-  if (loading || !url) {
-    return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  }
-
   return (
-    <WebView
-      source={{ uri: url }}
-      onNavigationStateChange={handleNavChange}
-    />
+    <View style={styles.container}>
+      <TouchableOpacity 
+        style={[styles.button, loading && styles.buttonDisabled]}
+        onPress={() => handleTopup(5000)} // Hardcoded for ₦5,000 topup
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#ffffff" />
+        ) : (
+          <Text style={styles.buttonText}>Top Up ₦5,000</Text>
+        )}
+      </TouchableOpacity>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    padding: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  button: {
+    backgroundColor: '#09a5db',
+    paddingVertical: 15,
+    paddingHorizontal: 30,
+    borderRadius: 8,
+    width: '100%',
+    alignItems: 'center',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3.84,
+  },
+  buttonDisabled: {
+    backgroundColor: '#a3d9ee',
+  },
+  buttonText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+});

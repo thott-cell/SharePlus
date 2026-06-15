@@ -1,52 +1,58 @@
-import { auth } from "../firebase/firebaseConfig";
+import axios from 'axios';
 
-const BASE_URL = "https://shareplus-server.onrender.com";
+// Replace with your actual live Render app URL
+const BACKEND_URL = 'https://shareplus-server.onrender.com';
 
-/* =========================
-   INIT PAYMENT
-========================= */
-export const initPayment = async (amount: number) => {
-  const user = auth.currentUser;
+export interface InitPaymentPayload {
+  email: string;
+  amount: number;
+  uid: string;
+}
 
-  if (!user) throw new Error("User not logged in");
+export interface InitPaymentResponse {
+  authorization_url: string;
+  access_code: string;
+  reference: string;
+}
 
-  const res = await fetch(`${BASE_URL}/paystack/init`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      email: user.email,
-      amount,
-    }),
-  });
+export interface VerifyPaymentResponse {
+  status: string;
+  balance: number;
+}
 
-  const data = await res.json();
+const paystackService = {
+  /**
+   * 1. Initialize payment with the Node.js backend
+   * Hits: POST /paystack/init
+   */
+  initializePayment: async (payload: InitPaymentPayload): Promise<InitPaymentResponse> => {
+    try {
+      const response = await axios.post<InitPaymentResponse>(
+        `${BACKEND_URL}/paystack/init`,
+        payload
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error('paystackService.initializePayment Error:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to initialize payment gateway.');
+    }
+  },
 
-  console.log("INIT RESPONSE:", data);
-
-  if (!res.ok || !data?.authorization_url) {
-    throw new Error(data?.message || "Init failed");
-  }
-
-  return data; // IMPORTANT: flat object
+  /**
+   * 2. Verify payment with the Node.js backend after completion
+   * Hits: GET /paystack/verify/:reference
+   */
+  verifyPayment: async (reference: string): Promise<VerifyPaymentResponse> => {
+    try {
+      const response = await axios.get<VerifyPaymentResponse>(
+        `${BACKEND_URL}/paystack/verify/${reference}`
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error('paystackService.verifyPayment Error:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to verify payment transaction.');
+    }
+  },
 };
 
-/* =========================
-   VERIFY PAYMENT
-========================= */
-export const verifyPayment = async (reference: string) => {
-  const res = await fetch(
-    `${BASE_URL}/paystack/verify/${reference}`
-  );
-
-  const data = await res.json();
-
-  console.log("VERIFY RESPONSE:", data);
-
-  if (!res.ok) {
-    throw new Error(data.message || "Verify failed");
-  }
-
-  return data;
-};
+export default paystackService;

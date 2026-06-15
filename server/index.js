@@ -41,7 +41,7 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   INIT PAYMENT (IMPORTANT FIX)
+   INIT PAYMENT
 ========================= */
 app.post("/paystack/init", async (req, res) => {
   try {
@@ -51,7 +51,7 @@ app.post("/paystack/init", async (req, res) => {
       "https://api.paystack.co/transaction/initialize",
       {
         email,
-        amount: amount * 100,
+        amount: amount * 100, // Convert to kobo
         metadata: {
           uid: uid,
         },
@@ -72,13 +72,88 @@ app.post("/paystack/init", async (req, res) => {
 });
 
 /* =========================
-   WEBHOOK (FINAL FIXED VERSION)
+   VERIFY PAYMENT (FRONTEND FALLBACK)
+========================= */
+app.get("/paystack/verify/:reference", async (req, res) => {
+  try {
+    const { reference } = req.params;
+
+    // Verify transaction directly with Paystack API
+    const response = await axios.get(
+      `https://paystack.co{reference}`,
+      {
+        headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` }
+      }
+    );
+
+    const payment = response.data.data;
+
+    if (payment.status !== "success") {
+      return res.status(400).json({ message: "Transaction was not successful" });
+    }
+
+    const uid = payment.metadata?.uid;
+    const amount = payment.amount / 100; // Convert from kobo back to Naira
+
+    if (!uid) {
+      return res.status(400).json({ message: "UID missing in metadata" });
+    }
+
+    // Process wallet update atomically using a Firestore transaction
+    const userRef = db.collection("users").doc(uid);
+    
+    const result = await db.runTransaction(async (transaction) => {
+      const userSnap = await transaction.get(userRef);
+
+      if (!userSnap.exists) {
+        throw new Error("User not found");
+      }
+
+      // Check if this transaction reference was already processed to avoid double crediting
+      const txRef = db.collection("transactions").doc(reference);
+      const txSnap = await transaction.get(txRef);
+      
+      if (txSnap.exists) {
+        return { status: "already_processed", balance: userSnap.data().balance };
+      }
+
+      const current = Number(userSnap.data().balance || 0);
+      const newBalance = current + amount;
+
+      // Update wallet balance
+      transaction.update(userRef, {
+        balance: newBalance,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      // Write transaction history using reference as the document ID
+      transaction.set(txRef, {
+        uid,
+        type: "topup",
+        amount,
+        reference,
+        balanceAfter: newBalance,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return { status: "success", balance: newBalance };
+    });
+
+    console.log(`✅ WALLET VERIFIED & CREDITED VIA API: ${uid}, New Balance: ${result.balance}`);
+    return res.status(200).json({ status: "success", balance: result.balance });
+
+  } catch (err) {
+    console.log("VERIFY ERROR:", err.message);
+    return res.status(500).json({ message: err.message || "Verification failed" });
+  }
+});
+
+/* =========================
+   WEBHOOK (BACKEND AUTOMATION)
 ========================= */
 app.post("/paystack/webhook", async (req, res) => {
   try {
     console.log("🔥 WEBHOOK HIT RECEIVED");
-    console.log(JSON.stringify(req.body, null, 2));
-
     const event = req.body;
 
     if (event.event !== "charge.success") {
@@ -86,7 +161,6 @@ app.post("/paystack/webhook", async (req, res) => {
     }
 
     const payment = event.data;
-
     const uid = payment.metadata?.uid;
     const amount = payment.amount / 100;
     const reference = payment.reference;
@@ -97,30 +171,42 @@ app.post("/paystack/webhook", async (req, res) => {
     }
 
     const userRef = db.collection("users").doc(uid);
-    const userSnap = await userRef.get();
+    
+    await db.runTransaction(async (transaction) => {
+      const userSnap = await transaction.get(userRef);
 
-    if (!userSnap.exists) {
-      console.log("❌ User not found:", uid);
-      return res.sendStatus(200);
-    }
+      if (!userSnap.exists) {
+        console.log("❌ User not found:", uid);
+        return;
+      }
 
-    const current = Number(userSnap.data().balance || 0);
-    const newBalance = current + amount;
+      const txRef = db.collection("transactions").doc(reference);
+      const txSnap = await transaction.get(txRef);
 
-    await userRef.update({
-      balance: newBalance,
+      if (txSnap.exists) {
+        console.log("⚠️ Transaction already processed via Verify endpoint.");
+        return;
+      }
+
+      const current = Number(userSnap.data().balance || 0);
+      const newBalance = current + amount;
+
+      transaction.update(userRef, {
+        balance: newBalance,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      transaction.set(txRef, {
+        uid,
+        type: "topup",
+        amount,
+        reference,
+        balanceAfter: newBalance,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      console.log("✅ WALLET CREDITED VIA WEBHOOK:", uid, newBalance);
     });
-
-    await db.collection("transactions").add({
-      uid,
-      type: "topup",
-      amount,
-      reference,
-      balanceAfter: newBalance,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    console.log("✅ WALLET CREDITED:", uid, newBalance);
 
     return res.sendStatus(200);
   } catch (err) {

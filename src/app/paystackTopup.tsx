@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Linking, StyleS
 import axios from 'axios';
 
 // Replace with your actual live Render app URL
-const BACKEND_URL = 'https://onrender.com'; 
+const BACKEND_URL = 'https://shareplus-server.onrender.com'; 
 
 interface TopupProps {
   user: {

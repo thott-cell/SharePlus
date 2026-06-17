@@ -15,22 +15,21 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 /* =========================
-   FIREBASE INIT (FIXED PATH FOR RENDER)
+   FIREBASE INIT
 ========================= */
 if (!admin.apps.length) {
   const renderSecretPath = "/etc/secrets/serviceAccountKey.json";
   const localSecretPath = "./serviceAccountKey.json";
-  
   let chosenPath = "";
 
   if (fs.existsSync(renderSecretPath)) {
     chosenPath = renderSecretPath;
-    console.log("🔒 Initializing Firebase via Render Secure Secret File path...");
+    console.log("🔒 Initializing Firebase via Render Path...");
   } else if (fs.existsSync(localSecretPath)) {
     chosenPath = localSecretPath;
-    console.log("💻 Initializing Firebase via Local Development File path...");
+    console.log("💻 Initializing Firebase via Local Path...");
   } else {
-    console.error("❌ CRITICAL ERROR: serviceAccountKey.json could not be found anywhere on this machine!");
+    console.error("❌ CRITICAL ERROR: serviceAccountKey.json missing!");
     process.exit(1);
   }
 
@@ -39,10 +38,9 @@ if (!admin.apps.length) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
-    console.log("✅ Firebase Admin successfully initialized and live!");
+    console.log("✅ Firebase Admin successfully initialized!");
   } catch (err) {
-    console.error("❌ CRITICAL ERROR: Could not parse or execute the credentials file:");
-    console.error(err.message);
+    console.error("❌ CRITICAL ERROR: Could not parse firebase json:", err.message);
     process.exit(1);
   }
 }
@@ -50,18 +48,15 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 /* =========================
-   PAYSTACK KEY
+   PAYSTACK KEY CHECK
 ========================= */
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
-
 if (!PAYSTACK_SECRET) {
-  throw new Error("Missing PAYSTACK_SECRET_KEY");
+  console.error("❌ CRITICAL SETUP ERROR: PAYSTACK_SECRET_KEY is undefined inside environment setups!");
 }
 
 function extractUid(paymentObject) {
-  if (paymentObject.metadata?.uid) {
-    return paymentObject.metadata.uid;
-  }
+  if (paymentObject.metadata?.uid) return paymentObject.metadata.uid;
   if (paymentObject.metadata?.custom_fields) {
     const uidField = paymentObject.metadata.custom_fields.find(f => f.variable_name === 'uid');
     if (uidField) return uidField.value;
@@ -70,25 +65,26 @@ function extractUid(paymentObject) {
 }
 
 /* =========================
-   TEST ROUTE
-========================= */
-app.get("/", (req, res) => {
-  res.send("Server is LIVE and connected safely! 🚀");
-});
-
-/* =========================
-   INIT PAYMENT (FIXED DIRECT PAYMENT GATEWAY LINK)
+   INIT PAYMENT (GUARANTEES CARD/USSD OVERLAY ONLY)
 ========================= */
 app.post("/paystack/init", async (req, res) => {
   try {
     const { email, amount, uid } = req.body;
 
-    // Direct endpoint loads the checkout window immediately—no registration forms appear
+    // Strict structure checks to avoid passing incomplete payloads to Paystack
+    if (!email || !amount || !uid) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Incomplete parameters. Received Email: ${email}, Amount: ${amount}, UID: ${uid}` 
+      });
+    }
+
+    // Direct endpoint connection string 
     const response = await axios.post(
       "https://paystack.co",
       {
-        email,
-        amount: amount, // Mobile screen handles the Kobo conversion; passed cleanly here
+        email: email.trim(),
+        amount: Math.round(amount), // Passed directly in Kobo units from your UI screen
         metadata: {
           uid: uid,
           custom_fields: [
@@ -102,28 +98,39 @@ app.post("/paystack/init", async (req, res) => {
       },
       {
         headers: {
-          Authorization: `Bearer ${PAYSTACK_SECRET}`,
+          Authorization: `Bearer ${PAYSTACK_SECRET.trim()}`,
           "Content-Type": "application/json",
         },
       }
     );
 
-    // Returns the checkout transaction object containing authorization_url
-    res.json(response.data.data);
+    // CRUCIAL SAFETY RULE: Ensure authorization_url exists before responding
+    if (response.data && response.data.data && response.data.data.authorization_url) {
+      return res.json(response.data.data);
+    } else {
+      throw new Error("Paystack did not return a valid checkout gateway link window URL.");
+    }
+
   } catch (err) {
-    console.log("INIT ERROR:", err.response?.data || err.message);
-    res.status(500).json({ message: "Init failed" });
+    // Surface the actual validation breakdown message to your console logs
+    const detailedMessage = err.response?.data?.message || err.message;
+    console.error("❌ PAYSTACK GATEWAY REJECTION ENGINE LOG:", err.response?.data || err.message);
+    
+    return res.status(400).json({ 
+      success: false, 
+      message: "Could not initialize checkout form.", 
+      debugReason: detailedMessage 
+    });
   }
 });
 
 /* =========================
-   VERIFY PAYMENT (FIXED STRING INTERPOLATION SYNTAX)
+   VERIFY PAYMENT
 ========================= */
 app.get("/paystack/verify/:reference", async (req, res) => {
   try {
     const { reference } = req.params;
 
-    // Fixed API URL structure path
     const response = await axios.get(
       `https://paystack.co{reference}`,
       {
@@ -132,30 +139,24 @@ app.get("/paystack/verify/:reference", async (req, res) => {
     );
 
     const payment = response.data.data;
-
     if (payment.status !== "success") {
-      return res.status(400).json({ message: "Transaction was not successful" });
+      return res.status(400).json({ message: "Transaction incomplete" });
     }
 
     const uid = extractUid(payment);
     const amount = payment.amount / 100;
 
     if (!uid) {
-      return res.status(400).json({ message: "UID missing in metadata" });
+      return res.status(400).json({ message: "UID parameter missing in metadata properties" });
     }
 
     const userRef = db.collection("users").doc(uid);
-    
     const result = await db.runTransaction(async (transaction) => {
       const userSnap = await transaction.get(userRef);
-
-      if (!userSnap.exists) {
-        throw new Error("User not found");
-      }
+      if (!userSnap.exists) throw new Error("User record target doc not found");
 
       const txRef = db.collection("transactions").doc(reference);
       const txSnap = await transaction.get(txRef);
-      
       if (txSnap.exists) {
         return { status: "already_processed", balance: userSnap.data().balance };
       }
@@ -180,79 +181,11 @@ app.get("/paystack/verify/:reference", async (req, res) => {
       return { status: "success", balance: newBalance };
     });
 
-    console.log(`✅ WALLET CREDITED VIA API: ${uid}, Balance: ${result.balance}`);
     return res.status(200).json({ status: "success", balance: result.balance });
 
   } catch (err) {
-    console.log("VERIFY ERROR:", err.message);
-    return res.status(500).json({ message: err.message || "Verification failed" });
-  }
-});
-
-/* =========================
-   WEBHOOK
-========================= */
-app.post("/paystack/webhook", async (req, res) => {
-  try {
-    console.log("🔥 WEBHOOK HIT RECEIVED");
-    const event = req.body;
-
-    if (event.event !== "charge.success") {
-      return res.sendStatus(200);
-    }
-
-    const payment = event.data;
-    const uid = extractUid(payment);
-    const amount = payment.amount / 100;
-    const reference = payment.reference;
-
-    if (!uid) {
-      console.log("❌ UID missing in metadata");
-      return res.sendStatus(200);
-    }
-
-    const userRef = db.collection("users").doc(uid);
-    
-    await db.runTransaction(async (transaction) => {
-      const userSnap = await transaction.get(userRef);
-
-      if (!userSnap.exists) {
-        console.log("❌ User not found:", uid);
-        return;
-      }
-
-      const txRef = db.collection("transactions").doc(reference);
-      const txSnap = await transaction.get(txRef);
-
-      if (txSnap.exists) {
-        console.log("⚠️ Transaction already processed.");
-        return;
-      }
-
-      const current = Number(userSnap.data().balance || 0);
-      const newBalance = current + amount;
-
-      transaction.update(userRef, {
-        balance: newBalance,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-
-      transaction.set(txRef, {
-        uid,
-        type: "topup",
-        amount,
-        reference,
-        balanceAfter: newBalance,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      console.log("✅ WALLET CREDITED VIA WEBHOOK:", uid, newBalance);
-    });
-
-    return res.sendStatus(200);
-  } catch (err) {
-    console.log("WEBHOOK ERROR:", err.message);
-    return res.sendStatus(500);
+    console.error("VERIFY FAULT:", err.message);
+    return res.status(500).json({ message: err.message || "Verification routine failed" });
   }
 });
 
@@ -261,5 +194,5 @@ app.post("/paystack/webhook", async (req, res) => {
 ========================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("Server running smoothly on port", PORT);
 });

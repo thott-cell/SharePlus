@@ -1,11 +1,11 @@
 import axios from 'axios';
 
-// Replace with your actual live Render app URL
 const BACKEND_URL = 'https://shareplus-server.onrender.com';
+const TIMEOUT_LIMIT = 60000; // 60-second limit to handle server cold-starts
 
 export interface InitPaymentPayload {
   email: string;
-  amount: number;
+  amount: number; // Passed as face-value Naira (e.g. 5000), backend converts to Kobo
   uid: string;
 }
 
@@ -23,34 +23,36 @@ export interface VerifyPaymentResponse {
 const paystackService = {
   /**
    * 1. Initialize payment with the Node.js backend
-   * Hits: POST /paystack/init
    */
   initializePayment: async (payload: InitPaymentPayload): Promise<InitPaymentResponse> => {
     try {
       const response = await axios.post<InitPaymentResponse>(
         `${BACKEND_URL}/paystack/init`,
-        payload
+        payload,
+        { timeout: TIMEOUT_LIMIT }
       );
       return response.data;
     } catch (error: any) {
-      console.error('paystackService.initializePayment Error:', error.response?.data || error.message);
-      throw new Error(error.response?.data?.message || 'Failed to initialize payment gateway.');
+      const fallbackMsg = error.response?.data?.error || error.response?.data?.message || error.message;
+      console.error('paystackService.initializePayment Error:', fallbackMsg);
+      throw new Error(fallbackMsg || 'Failed to initialize payment gateway.');
     }
   },
 
   /**
    * 2. Verify payment with the Node.js backend after completion
-   * Hits: GET /paystack/verify/:reference
    */
   verifyPayment: async (reference: string): Promise<VerifyPaymentResponse> => {
     try {
       const response = await axios.get<VerifyPaymentResponse>(
-        `${BACKEND_URL}/paystack/verify/${reference}`
+        `${BACKEND_URL}/paystack/verify/${reference}`,
+        { timeout: TIMEOUT_LIMIT }
       );
       return response.data;
     } catch (error: any) {
-      console.error('paystackService.verifyPayment Error:', error.response?.data || error.message);
-      throw new Error(error.response?.data?.message || 'Failed to verify payment transaction.');
+      const fallbackMsg = error.response?.data?.message || error.message;
+      console.error('paystackService.verifyPayment Error:', fallbackMsg);
+      throw new Error(fallbackMsg || 'Failed to verify payment transaction.');
     }
   },
 };

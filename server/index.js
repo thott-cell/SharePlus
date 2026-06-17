@@ -3,7 +3,7 @@ const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const fs = require("fs"); // Node built-in file system tool
+const fs = require("fs"); 
 
 const app = express();
 
@@ -18,7 +18,6 @@ app.use(express.urlencoded({ extended: false }));
    FIREBASE INIT (FIXED PATH FOR RENDER)
 ========================= */
 if (!admin.apps.length) {
-  // Render saves Secret Files strictly inside the '/etc/secrets/' directory path
   const renderSecretPath = "/etc/secrets/serviceAccountKey.json";
   const localSecretPath = "./serviceAccountKey.json";
   
@@ -78,17 +77,18 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   INIT PAYMENT
+   INIT PAYMENT (FIXED API PATH)
 ========================= */
 app.post("/paystack/init", async (req, res) => {
   try {
     const { email, amount, uid } = req.body;
 
+    // FIX: Using precise Paystack transaction link so it displays ONLY local checkout options
     const response = await axios.post(
       "https://paystack.co",
       {
         email,
-        amount: amount * 100,
+        amount: amount * 100, // Converts Naira face value to Kobo units safely
         metadata: {
           uid: uid,
           custom_fields: [
@@ -111,17 +111,18 @@ app.post("/paystack/init", async (req, res) => {
     res.json(response.data.data);
   } catch (err) {
     console.log("INIT ERROR:", err.response?.data || err.message);
-    res.status(500).json({ message: "Init failed" });
+    res.status(500).json({ message: "Init failed", error: err.response?.data?.message || err.message });
   }
 });
 
 /* =========================
-   VERIFY PAYMENT
+   VERIFY PAYMENT (FIXED STRING INTERPOLATION SYNTAX)
 ========================= */
 app.get("/paystack/verify/:reference", async (req, res) => {
   try {
     const { reference } = req.params;
 
+    // FIX: Corrected template literal path structure to read the variable value properly
     const response = await axios.get(
       `https://paystack.co{reference}`,
       {

@@ -1,7 +1,8 @@
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 
-// Replace with your actual live Render app URL
-const BACKEND_URL = 'https://shareplus-server.onrender.com';
+// Render free tier requires a long timeout (60s) to handle server cold starts
+const BACKEND_URL = 'https://onrender.com';
+const REQUEST_TIMEOUT = 60000; 
 
 export interface InitPaymentPayload {
   email: string;
@@ -20,37 +21,52 @@ export interface VerifyPaymentResponse {
   balance: number;
 }
 
+/**
+ * Extracts a clean error message from Axios responses
+ */
+const getErrorMessage = (error: unknown, defaultMessage: string): string => {
+  if (axios.isAxiosError(error)) {
+    const serverMessage = error.response?.data?.message || error.response?.data?.error;
+    if (serverMessage) return serverMessage;
+    if (error.code === 'ECONNABORTED') return 'Server took too long to respond. Please try again.';
+    return error.message;
+  }
+  return error instanceof Error ? error.message : defaultMessage;
+};
+
 const paystackService = {
   /**
-   * 1. Initialize payment with the Node.js backend
-   * Hits: POST /paystack/init
+   * Initializes payment transaction with the backend gateway
    */
   initializePayment: async (payload: InitPaymentPayload): Promise<InitPaymentResponse> => {
     try {
       const response = await axios.post<InitPaymentResponse>(
         `${BACKEND_URL}/paystack/init`,
-        payload
+        payload,
+        { timeout: REQUEST_TIMEOUT }
       );
       return response.data;
-    } catch (error: any) {
-      console.error('paystackService.initializePayment Error:', error.response?.data || error.message);
-      throw new Error(error.response?.data?.message || 'Failed to initialize payment gateway.');
+    } catch (error) {
+      const cleanError = getErrorMessage(error, 'Failed to initialize payment gateway.');
+      console.error('[PaystackService] Init Error:', cleanError);
+      throw new Error(cleanError);
     }
   },
 
   /**
-   * 2. Verify payment with the Node.js backend after completion
-   * Hits: GET /paystack/verify/:reference
+   * Verifies payment status on the backend after transaction completion
    */
   verifyPayment: async (reference: string): Promise<VerifyPaymentResponse> => {
     try {
       const response = await axios.get<VerifyPaymentResponse>(
-        `${BACKEND_URL}/paystack/verify/${reference}`
+        `${BACKEND_URL}/paystack/verify/${reference}`,
+        { timeout: REQUEST_TIMEOUT }
       );
       return response.data;
-    } catch (error: any) {
-      console.error('paystackService.verifyPayment Error:', error.response?.data || error.message);
-      throw new Error(error.response?.data?.message || 'Failed to verify payment transaction.');
+    } catch (error) {
+      const cleanError = getErrorMessage(error, 'Failed to verify payment transaction.');
+      console.error('[PaystackService] Verify Error:', cleanError);
+      throw new Error(cleanError);
     }
   },
 };

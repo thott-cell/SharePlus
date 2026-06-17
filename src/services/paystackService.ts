@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const BACKEND_URL = 'https://onrender.com';
+const BACKEND_URL = 'https://shareplus-server.onrender.com';
 const REQUEST_TIMEOUT = 60000; 
 
 export interface InitPaymentPayload {

@@ -1,11 +1,11 @@
 import axios from 'axios';
 
+// Replace with your actual live Render app URL
 const BACKEND_URL = 'https://shareplus-server.onrender.com';
-const REQUEST_TIMEOUT = 60000; 
 
 export interface InitPaymentPayload {
   email: string;
-  amount: number; // Sent as Kobo (Naira * 100)
+  amount: number;
   uid: string;
 }
 
@@ -20,46 +20,37 @@ export interface VerifyPaymentResponse {
   balance: number;
 }
 
-const getErrorMessage = (error: unknown, defaultMessage: string): string => {
-  if (axios.isAxiosError(error)) {
-    const serverMessage = error.response?.data?.error || error.response?.data?.message;
-    if (serverMessage) return serverMessage;
-    if (error.code === 'ECONNABORTED') return 'Server took too long to respond. Please try again.';
-    return error.message;
-  }
-  return error instanceof Error ? error.message : defaultMessage;
-};
-
 const paystackService = {
+  /**
+   * 1. Initialize payment with the Node.js backend
+   * Hits: POST /paystack/init
+   */
   initializePayment: async (payload: InitPaymentPayload): Promise<InitPaymentResponse> => {
     try {
       const response = await axios.post<InitPaymentResponse>(
         `${BACKEND_URL}/paystack/init`,
-        payload,
-        { 
-          timeout: REQUEST_TIMEOUT,
-          headers: { 'Content-Type': 'application/json' }
-        }
+        payload
       );
       return response.data;
-    } catch (error) {
-      const cleanError = getErrorMessage(error, 'Failed to initialize payment gateway.');
-      console.error('[PaystackService] Init Error:', cleanError);
-      throw new Error(cleanError);
+    } catch (error: any) {
+      console.error('paystackService.initializePayment Error:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to initialize payment gateway.');
     }
   },
 
+  /**
+   * 2. Verify payment with the Node.js backend after completion
+   * Hits: GET /paystack/verify/:reference
+   */
   verifyPayment: async (reference: string): Promise<VerifyPaymentResponse> => {
     try {
       const response = await axios.get<VerifyPaymentResponse>(
-        `${BACKEND_URL}/paystack/verify/${reference}`,
-        { timeout: REQUEST_TIMEOUT }
+        `${BACKEND_URL}/paystack/verify/${reference}`
       );
       return response.data;
-    } catch (error) {
-      const cleanError = getErrorMessage(error, 'Failed to verify payment transaction.');
-      console.error('[PaystackService] Verify Error:', cleanError);
-      throw new Error(cleanError);
+    } catch (error: any) {
+      console.error('paystackService.verifyPayment Error:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to verify payment transaction.');
     }
   },
 };

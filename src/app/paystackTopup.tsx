@@ -1,72 +1,103 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, Linking, StyleSheet } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import paystackService from '../services/paystackService'; 
 
 export default function PaystackTopup() {
+  const router = useRouter();
   const [loading, setLoading] = useState<boolean>(false);
-  const { uid, email } = useLocalSearchParams<{ uid: string; email: string }>();
+  
+  // Safe extraction of parameters from Expo Router context
+  const params = useLocalSearchParams();
+  const uid = typeof params.uid === 'string' ? params.uid : '';
+  const email = typeof params.email === 'string' ? params.email : '';
+
+  // 1. Instantly validate parameters on mount to catch setup errors early
+  useEffect(() => {
+    if (!uid || !email) {
+      console.warn("❌ Paystack Popup mounted with missing params:", { uid, email });
+      Alert.alert(
+        'Profile Error',
+        'Your user profile context could not be loaded. Please try again.',
+        [{ text: 'Go Back', onPress: () => router.back() }]
+      );
+    }
+  }, [uid, email]);
 
   /**
    * Triggers the payment creation flow
-   * @param amountInNaira Face value in Naira (e.g. 5000)
    */
   const handleTopup = async (amountInNaira: number) => {
     if (!uid || !email) {
-      Alert.alert('Configuration Error', 'Missing transaction profile context variables.');
+      Alert.alert('Error', 'Cannot proceed without profile authentication variables.');
       return;
     }
 
     setLoading(true);
     try {
-      // Paystack expects amount in Kobo (Naira * 100)
-      const amountInKobo = amountInNaira * 100;
+      // Convert Naira face value directly to Kobo (Naira * 100)
+      const amountInKobo = Math.round(amountInNaira * 100);
 
-      const { authorization_url, reference } = await paystackService.initializePayment({
-        email: email,
+      const response = await paystackService.initializePayment({
+        email: email.trim(),
         amount: amountInKobo,
-        uid: uid,
+        uid: uid.trim(),
       });
 
-      if (authorization_url) {
-        // Open payment portal in the device's native browser
-        const supported = await Linking.canOpenURL(authorization_url);
+      // Secure handling of the initialization response object
+      if (response && response.authorization_url) {
+        const url = response.authorization_url;
+        
+        const supported = await Linking.canOpenURL(url);
         if (supported) {
-          await Linking.openURL(authorization_url);
+          await Linking.openURL(url);
           
-          // Present action prompt for the user to confirm completion
           Alert.alert(
             'Confirm Payment',
-            'Complete your transaction in the browser window, then return here to verify.',
-            [{ text: 'Verify My Payment', onPress: () => verifyPayment(reference) }]
+            'Complete your transaction in the browser window, then tap below to update your wallet.',
+            [
+              { 
+                text: 'Verify My Payment', 
+                onPress: () => verifyPayment(response.reference) 
+              }
+            ],
+            { cancelable: false }
           );
         } else {
-          Alert.alert('Error', 'Unable to open the payment link on this device.');
+          Alert.alert('Browser Error', 'Your device configuration cannot open this payment link.');
         }
+      } else {
+        throw new Error('Invalid server initialization payload.');
       }
     } catch (error: any) {
-      Alert.alert('Payment Failed', error.message || 'Could not connect to payment gateway.');
+      // Safe extraction of the exact backend error text string
+      const failureReason = error.response?.data?.error || error.message || 'Initialization failed.';
+      Alert.alert('Payment Initialization Failed', failureReason);
     } finally {
       setLoading(false);
     }
   };
 
   /**
-   * Hits your backend to verify the transaction reference code
+   * Contacts backend to verify the completion reference code
    */
   const verifyPayment = async (reference: string) => {
+    if (!reference) return;
     setLoading(true);
     try {
       const verifyResponse = await paystackService.verifyPayment(reference);
       
-      // Strict verification status check matching Paystack response profiles
-      if (verifyResponse.status === 'success' || (verifyResponse as any).data?.status === 'success') {
-        Alert.alert('Success 🎉', `Wallet updated! New balance: ₦${verifyResponse.balance.toLocaleString()}`);
+      if (verifyResponse && (verifyResponse.status === 'success' || (verifyResponse as any).data?.status === 'success')) {
+        Alert.alert(
+          'Success 🎉', 
+          `Wallet updated! New balance: ₦${Number(verifyResponse.balance).toLocaleString()}`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
       } else {
-        Alert.alert('Pending', 'Payment has not been completed yet. Please complete it in your browser.');
+        Alert.alert('Processing', 'Payment authorization is pending or incomplete. Please finish the process.');
       }
     } catch (error: any) {
-      Alert.alert('Verification Failed', error.message || 'Could not verify transaction.');
+      Alert.alert('Verification Failed', error.message || 'Could not verify transaction reference.');
     } finally {
       setLoading(false);
     }
@@ -74,10 +105,13 @@ export default function PaystackTopup() {
 
   return (
     <View style={styles.container}>
+      <Text style={styles.titleText}>Fund Your Wallet</Text>
+      <Text style={styles.subText}>Securely credit your account via Paystack gateway infrastructure.</Text>
+
       <TouchableOpacity 
-        style={[styles.button, loading && styles.disabledButton]} 
+        style={[styles.button, (loading || !uid) && styles.disabledButton]} 
         onPress={() => handleTopup(5000)} 
-        disabled={loading}
+        disabled={loading || !uid}
       >
         {loading ? (
           <ActivityIndicator color="#fff" />
@@ -95,18 +129,38 @@ const styles = StyleSheet.create({
     justifyContent: 'center', 
     alignItems: 'center', 
     backgroundColor: '#070B1A', 
-    padding: 20 
+    padding: 24 
+  },
+  titleText: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    textAlign: 'center'
+  },
+  subText: {
+    color: '#9CA3AF',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 32,
+    paddingHorizontal: 16
   },
   button: { 
     backgroundColor: '#7C3AED', 
-    padding: 15, 
+    padding: 16, 
     borderRadius: 15, 
     width: '100%', 
-    alignItems: 'center' 
+    alignItems: 'center',
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5
   },
   disabledButton: {
     backgroundColor: '#4C1D95',
-    opacity: 0.6
+    opacity: 0.5,
+    elevation: 0
   },
   buttonText: { 
     color: '#fff', 

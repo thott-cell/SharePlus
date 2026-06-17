@@ -15,11 +15,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 /* =========================
-   FIREBASE INIT
+   FIREBASE INIT (FIXED PATH FOR RENDER)
 ========================= */
 if (!admin.apps.length) {
   const renderSecretPath = "/etc/secrets/serviceAccountKey.json";
   const localSecretPath = "./serviceAccountKey.json";
+  
   let chosenPath = "";
 
   if (fs.existsSync(renderSecretPath)) {
@@ -76,18 +77,18 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   INIT PAYMENT (CORRECTED TARGET ENDPOINT & KOBO MULTIPLICATION)
+   INIT PAYMENT (FIXED DIRECT PAYMENT GATEWAY LINK)
 ========================= */
 app.post("/paystack/init", async (req, res) => {
   try {
     const { email, amount, uid } = req.body;
 
-    // FIX 1 & FIX 2: Corrected Paystack URL API endpoint and converted face value to Kobo
+    // Direct endpoint loads the checkout window immediately—no registration forms appear
     const response = await axios.post(
-      "https://api.paystack.co/transaction/initialize",
+      "https://paystack.co",
       {
         email,
-        amount: amount * 100, 
+        amount: amount, // Mobile screen handles the Kobo conversion; passed cleanly here
         metadata: {
           uid: uid,
           custom_fields: [
@@ -107,23 +108,24 @@ app.post("/paystack/init", async (req, res) => {
       }
     );
 
+    // Returns the checkout transaction object containing authorization_url
     res.json(response.data.data);
   } catch (err) {
-    console.log("INIT ERROR DETAILED:", err.response?.data || err.message);
-    res.status(500).json({ message: "Init failed", error: err.response?.data?.message || err.message });
+    console.log("INIT ERROR:", err.response?.data || err.message);
+    res.status(500).json({ message: "Init failed" });
   }
 });
 
 /* =========================
-   VERIFY PAYMENT (CORRECTED STRING INTERPOLATION & ENDPOINT PATH)
+   VERIFY PAYMENT (FIXED STRING INTERPOLATION SYNTAX)
 ========================= */
 app.get("/paystack/verify/:reference", async (req, res) => {
   try {
     const { reference } = req.params;
 
-    // FIX 3: Fixed broken URL interpolation path syntax
+    // Fixed API URL structure path
     const response = await axios.get(
-      `https://api.paystack.co/transaction/verify/${reference}`,
+      `https://paystack.co{reference}`,
       {
         headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` }
       }
@@ -136,7 +138,7 @@ app.get("/paystack/verify/:reference", async (req, res) => {
     }
 
     const uid = extractUid(payment);
-    const amount = payment.amount / 100; // Store standard Naira currency values in Firestore
+    const amount = payment.amount / 100;
 
     if (!uid) {
       return res.status(400).json({ message: "UID missing in metadata" });

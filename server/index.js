@@ -3,7 +3,6 @@ const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const fs = require("fs"); 
 
 const app = express();
 
@@ -12,40 +11,16 @@ const app = express();
 ========================= */
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: true }));
 
 /* =========================
-   FIREBASE INIT (FIXED PATH FOR RENDER)
+   FIREBASE INIT
 ========================= */
-if (!admin.apps.length) {
-  const renderSecretPath = "/etc/secrets/serviceAccountKey.json";
-  const localSecretPath = "./serviceAccountKey.json";
-  
-  let chosenPath = "";
+const serviceAccount = require("./serviceAccountKey.json");
 
-  if (fs.existsSync(renderSecretPath)) {
-    chosenPath = renderSecretPath;
-    console.log("🔒 Initializing Firebase via Render Secure Secret File path...");
-  } else if (fs.existsSync(localSecretPath)) {
-    chosenPath = localSecretPath;
-    console.log("💻 Initializing Firebase via Local Development File path...");
-  } else {
-    console.error("❌ CRITICAL ERROR: serviceAccountKey.json could not be found anywhere on this machine!");
-    process.exit(1);
-  }
-
-  try {
-    const serviceAccount = require(chosenPath);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
-    console.log("✅ Firebase Admin successfully initialized and live!");
-  } catch (err) {
-    console.error("❌ CRITICAL ERROR: Could not parse or execute the credentials file:");
-    console.error(err.message);
-    process.exit(1);
-  }
-}
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const db = admin.firestore();
 
@@ -58,47 +33,19 @@ if (!PAYSTACK_SECRET) {
   throw new Error("Missing PAYSTACK_SECRET_KEY");
 }
 
-function extractUid(paymentObject) {
-  if (paymentObject.metadata?.uid) {
-    return paymentObject.metadata.uid;
-  }
-  if (paymentObject.metadata?.custom_fields) {
-    const uidField = paymentObject.metadata.custom_fields.find(f => f.variable_name === 'uid');
-    if (uidField) return uidField.value;
-  }
-  return null;
-}
-
 /* =========================
-   TEST ROUTE
-========================= */
-app.get("/", (req, res) => {
-  res.send("Server is LIVE and connected safely! 🚀");
-});
-
-/* =========================
-   INIT PAYMENT (FIXED API PATH)
+   INIT PAYMENT
 ========================= */
 app.post("/paystack/init", async (req, res) => {
   try {
     const { email, amount, uid } = req.body;
 
-    // FIX: Using precise Paystack transaction link so it displays ONLY local checkout options
     const response = await axios.post(
-      "https://paystack.co",
+      "https://api.paystack.co/transaction/initialize",
       {
         email,
-        amount: amount * 100, // Converts Naira face value to Kobo units safely
-        metadata: {
-          uid: uid,
-          custom_fields: [
-            {
-              display_name: "User UID",
-              variable_name: "uid",
-              value: uid
-            }
-          ]
-        },
+        amount: amount * 100,
+        metadata: { uid },
       },
       {
         headers: {
@@ -108,92 +55,20 @@ app.post("/paystack/init", async (req, res) => {
       }
     );
 
-    res.json(response.data.data);
+    return res.json(response.data.data);
   } catch (err) {
     console.log("INIT ERROR:", err.response?.data || err.message);
-    res.status(500).json({ message: "Init failed", error: err.response?.data?.message || err.message });
+    return res.status(500).json({ message: "Init failed" });
   }
 });
 
 /* =========================
-   VERIFY PAYMENT (FIXED STRING INTERPOLATION SYNTAX)
-========================= */
-app.get("/paystack/verify/:reference", async (req, res) => {
-  try {
-    const { reference } = req.params;
-
-    // FIX: Corrected template literal path structure to read the variable value properly
-    const response = await axios.get(
-      `https://paystack.co{reference}`,
-      {
-        headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` }
-      }
-    );
-
-    const payment = response.data.data;
-
-    if (payment.status !== "success") {
-      return res.status(400).json({ message: "Transaction was not successful" });
-    }
-
-    const uid = extractUid(payment);
-    const amount = payment.amount / 100;
-
-    if (!uid) {
-      return res.status(400).json({ message: "UID missing in metadata" });
-    }
-
-    const userRef = db.collection("users").doc(uid);
-    
-    const result = await db.runTransaction(async (transaction) => {
-      const userSnap = await transaction.get(userRef);
-
-      if (!userSnap.exists) {
-        throw new Error("User not found");
-      }
-
-      const txRef = db.collection("transactions").doc(reference);
-      const txSnap = await transaction.get(txRef);
-      
-      if (txSnap.exists) {
-        return { status: "already_processed", balance: userSnap.data().balance };
-      }
-
-      const current = Number(userSnap.data().balance || 0);
-      const newBalance = current + amount;
-
-      transaction.update(userRef, {
-        balance: newBalance,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-
-      transaction.set(txRef, {
-        uid,
-        type: "topup",
-        amount,
-        reference,
-        balanceAfter: newBalance,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      return { status: "success", balance: newBalance };
-    });
-
-    console.log(`✅ WALLET CREDITED VIA API: ${uid}, Balance: ${result.balance}`);
-    return res.status(200).json({ status: "success", balance: result.balance });
-
-  } catch (err) {
-    console.log("VERIFY ERROR:", err.message);
-    return res.status(500).json({ message: err.message || "Verification failed" });
-  }
-});
-
-/* =========================
-   WEBHOOK
+   WEBHOOK ONLY (REAL CREDIT SYSTEM)
 ========================= */
 app.post("/paystack/webhook", async (req, res) => {
   try {
-    console.log("🔥 WEBHOOK HIT RECEIVED");
+    console.log("🔥 WEBHOOK RECEIVED");
+
     const event = req.body;
 
     if (event.event !== "charge.success") {
@@ -201,51 +76,46 @@ app.post("/paystack/webhook", async (req, res) => {
     }
 
     const payment = event.data;
-    const uid = extractUid(payment);
+    const uid = payment.metadata?.uid;
     const amount = payment.amount / 100;
     const reference = payment.reference;
 
     if (!uid) {
-      console.log("❌ UID missing in metadata");
+      console.log("❌ UID missing");
       return res.sendStatus(200);
     }
 
     const userRef = db.collection("users").doc(uid);
-    
-    await db.runTransaction(async (transaction) => {
-      const userSnap = await transaction.get(userRef);
+    const txRef = db.collection("transactions").doc(reference);
 
-      if (!userSnap.exists) {
-        console.log("❌ User not found:", uid);
-        return;
-      }
+    await db.runTransaction(async (t) => {
+      const userSnap = await t.get(userRef);
+      const txSnap = await t.get(txRef);
 
-      const txRef = db.collection("transactions").doc(reference);
-      const txSnap = await transaction.get(txRef);
+      if (!userSnap.exists) return;
 
       if (txSnap.exists) {
-        console.log("⚠️ Transaction already processed.");
+        console.log("⚠️ Already processed");
         return;
       }
 
       const current = Number(userSnap.data().balance || 0);
       const newBalance = current + amount;
 
-      transaction.update(userRef, {
+      t.update(userRef, {
         balance: newBalance,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
 
-      transaction.set(txRef, {
+      t.set(txRef, {
         uid,
-        type: "topup",
         amount,
         reference,
+        type: "topup",
         balanceAfter: newBalance,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      console.log("✅ WALLET CREDITED VIA WEBHOOK:", uid, newBalance);
+      console.log("✅ CREDITED:", uid, newBalance);
     });
 
     return res.sendStatus(200);
@@ -256,9 +126,8 @@ app.post("/paystack/webhook", async (req, res) => {
 });
 
 /* =========================
-   START SERVER
+   SERVER START
 ========================= */
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Server running 🚀");
 });

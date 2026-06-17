@@ -15,12 +15,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 /* =========================
-   FIREBASE INIT (FIXED PATH FOR RENDER)
+   FIREBASE INIT
 ========================= */
 if (!admin.apps.length) {
   const renderSecretPath = "/etc/secrets/serviceAccountKey.json";
   const localSecretPath = "./serviceAccountKey.json";
-  
   let chosenPath = "";
 
   if (fs.existsSync(renderSecretPath)) {
@@ -30,7 +29,7 @@ if (!admin.apps.length) {
     chosenPath = localSecretPath;
     console.log("💻 Initializing Firebase via Local Development File path...");
   } else {
-    console.error("❌ CRITICAL ERROR: serviceAccountKey.json could not be found anywhere on this machine!");
+    console.error("❌ CRITICAL ERROR: serviceAccountKey.json could not be found!");
     process.exit(1);
   }
 
@@ -39,10 +38,9 @@ if (!admin.apps.length) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
-    console.log("✅ Firebase Admin successfully initialized and live!");
+    console.log("✅ Firebase Admin successfully initialized!");
   } catch (err) {
-    console.error("❌ CRITICAL ERROR: Could not parse or execute the credentials file:");
-    console.error(err.message);
+    console.error("❌ CRITICAL ERROR: Could not parse credentials file:", err.message);
     process.exit(1);
   }
 }
@@ -53,15 +51,12 @@ const db = admin.firestore();
    PAYSTACK KEY
 ========================= */
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
-
 if (!PAYSTACK_SECRET) {
-  throw new Error("Missing PAYSTACK_SECRET_KEY");
+  throw new Error("Missing PAYSTACK_SECRET_KEY in environment variables!");
 }
 
 function extractUid(paymentObject) {
-  if (paymentObject.metadata?.uid) {
-    return paymentObject.metadata.uid;
-  }
+  if (paymentObject.metadata?.uid) return paymentObject.metadata.uid;
   if (paymentObject.metadata?.custom_fields) {
     const uidField = paymentObject.metadata.custom_fields.find(f => f.variable_name === 'uid');
     if (uidField) return uidField.value;
@@ -77,18 +72,22 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   INIT PAYMENT (CORRECTED URL & PARAMETERS)
+   INIT PAYMENT (FIXED API ENDPOINTS)
 ========================= */
 app.post("/paystack/init", async (req, res) => {
   try {
     const { email, amount, uid } = req.body;
 
-    // Fixed Endpoint URL and removed the redundant * 100 multiplication
+    if (!email || !amount || !uid) {
+      return res.status(400).json({ message: "Missing required fields: email, amount, or uid" });
+    }
+
+    // Hit the exact transaction initialization endpoint on Paystack
     const response = await axios.post(
       "https://paystack.co",
       {
         email,
-        amount: amount, 
+        amount: amount, // Received directly in Kobo from mobile app
         metadata: {
           uid: uid,
           custom_fields: [
@@ -108,21 +107,21 @@ app.post("/paystack/init", async (req, res) => {
       }
     );
 
-    res.json(response.data.data);
+    return res.json(response.data.data);
   } catch (err) {
-    console.log("INIT ERROR:", err.response?.data || err.message);
-    res.status(500).json({ message: "Init failed", error: err.response?.data?.message || err.message });
+    const errorDetails = err.response?.data?.message || err.message;
+    console.log("INIT ERROR DETAILED:", err.response?.data || err.message);
+    return res.status(500).json({ message: "Init failed", error: errorDetails });
   }
 });
 
 /* =========================
-   VERIFY PAYMENT (CORRECTED INTERPOLATED ENDPOINT)
+   VERIFY PAYMENT (FIXED INTERPOLATED ROUTE)
 ========================= */
 app.get("/paystack/verify/:reference", async (req, res) => {
   try {
     const { reference } = req.params;
 
-    // Fixed API URL and string interpolation syntax
     const response = await axios.get(
       `https://paystack.co{reference}`,
       {
@@ -137,19 +136,18 @@ app.get("/paystack/verify/:reference", async (req, res) => {
     }
 
     const uid = extractUid(payment);
-    const amount = payment.amount / 100; // Convert back to Naira for database storage
+    const amount = payment.amount / 100; // Convert to Naira for database storage
 
     if (!uid) {
-      return res.status(400).json({ message: "UID missing in metadata" });
+      return res.status(400).json({ message: "UID missing in transaction metadata" });
     }
 
     const userRef = db.collection("users").doc(uid);
     
     const result = await db.runTransaction(async (transaction) => {
       const userSnap = await transaction.get(userRef);
-
       if (!userSnap.exists) {
-        throw new Error("User not found");
+        throw new Error("User not found in Firestore database");
       }
 
       const txRef = db.collection("transactions").doc(reference);
@@ -179,7 +177,7 @@ app.get("/paystack/verify/:reference", async (req, res) => {
       return { status: "success", balance: newBalance };
     });
 
-    console.log(`✅ WALLET CREDITED VIA API: ${uid}, Balance: ${result.balance}`);
+    console.log(`✅ WALLET CREDITED: ${uid}, Balance: ${result.balance}`);
     return res.status(200).json({ status: "success", balance: result.balance });
 
   } catch (err) {
@@ -206,7 +204,7 @@ app.post("/paystack/webhook", async (req, res) => {
     const reference = payment.reference;
 
     if (!uid) {
-      console.log("❌ UID missing in metadata");
+      console.log("❌ UID missing in webhook metadata");
       return res.sendStatus(200);
     }
 
@@ -214,19 +212,11 @@ app.post("/paystack/webhook", async (req, res) => {
     
     await db.runTransaction(async (transaction) => {
       const userSnap = await transaction.get(userRef);
-
-      if (!userSnap.exists) {
-        console.log("❌ User not found:", uid);
-        return;
-      }
+      if (!userSnap.exists) return;
 
       const txRef = db.collection("transactions").doc(reference);
       const txSnap = await transaction.get(txRef);
-
-      if (txSnap.exists) {
-        console.log("⚠️ Transaction already processed.");
-        return;
-      }
+      if (txSnap.exists) return;
 
       const current = Number(userSnap.data().balance || 0);
       const newBalance = current + amount;
@@ -245,7 +235,7 @@ app.post("/paystack/webhook", async (req, res) => {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      console.log("✅ WALLET CREDITED VIA WEBHOOK:", uid, newBalance);
+      console.log("✅ WEBHOOK CREDITED:", uid, newBalance);
     });
 
     return res.sendStatus(200);
@@ -255,9 +245,6 @@ app.post("/paystack/webhook", async (req, res) => {
   }
 });
 
-/* =========================
-   START SERVER
-========================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);

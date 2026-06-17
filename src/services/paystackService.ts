@@ -1,12 +1,11 @@
 import axios from 'axios';
 
-// Ensure there are absolutely no trailing slashes or hidden whitespaces here
-const BACKEND_URL = 'https://shareplus-server.onrender.com';
+const BACKEND_URL = 'https://onrender.com';
 const REQUEST_TIMEOUT = 60000; 
 
 export interface InitPaymentPayload {
   email: string;
-  amount: number;
+  amount: number; // Sent as Kobo (Naira * 100)
   uid: string;
 }
 
@@ -23,24 +22,15 @@ export interface VerifyPaymentResponse {
 
 const getErrorMessage = (error: unknown, defaultMessage: string): string => {
   if (axios.isAxiosError(error)) {
-    // If the server returned an explicit error response, grab it
-    const serverMessage = error.response?.data?.message || error.response?.data?.error;
+    const serverMessage = error.response?.data?.error || error.response?.data?.message;
     if (serverMessage) return serverMessage;
-    
-    // Catch common proxy or network handshake issues
     if (error.code === 'ECONNABORTED') return 'Server took too long to respond. Please try again.';
-    if (error.response?.status === 405) {
-      return `Network Config Error (405): Make sure the endpoint matches your server setup. Details: ${error.message}`;
-    }
     return error.message;
   }
   return error instanceof Error ? error.message : defaultMessage;
 };
 
 const paystackService = {
-  /**
-   * Initializes payment transaction with the backend gateway
-   */
   initializePayment: async (payload: InitPaymentPayload): Promise<InitPaymentResponse> => {
     try {
       const response = await axios.post<InitPaymentResponse>(
@@ -48,12 +38,7 @@ const paystackService = {
         payload,
         { 
           timeout: REQUEST_TIMEOUT,
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
-          // This tells axios to throw the real error instead of following a 301/302 mutating redirect
-          validateStatus: (status) => status >= 200 && status < 300
+          headers: { 'Content-Type': 'application/json' }
         }
       );
       return response.data;
@@ -64,19 +49,11 @@ const paystackService = {
     }
   },
 
-  /**
-   * Verifies payment status on the backend after transaction completion
-   */
   verifyPayment: async (reference: string): Promise<VerifyPaymentResponse> => {
     try {
       const response = await axios.get<VerifyPaymentResponse>(
         `${BACKEND_URL}/paystack/verify/${reference}`,
-        { 
-          timeout: REQUEST_TIMEOUT,
-          headers: {
-            'Accept': 'application/json'
-          }
-        }
+        { timeout: REQUEST_TIMEOUT }
       );
       return response.data;
     } catch (error) {
